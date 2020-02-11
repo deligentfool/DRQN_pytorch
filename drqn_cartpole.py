@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import random
 from collections import deque
-from common.wrappers import wrap_deepmind, make_atari, wrap_pytorch
+import gym
 
 
 class drqn_net(nn.Module):
@@ -15,27 +15,12 @@ class drqn_net(nn.Module):
         self.time_step = time_step
         self.layer_num = layer_num
         self.hidden_num = hidden_num
-        self.conv1 = nn.Conv2d(1, 32, 8, 4)
-        self.conv2 = nn.Conv2d(32, 64, 4, 2)
-        self.conv3 = nn.Conv2d(64, 64, 3, 1)
-        self.lstm = nn.LSTM(self.feature_size(), self.hidden_num, self.layer_num, batch_first=True)
+        self.lstm = nn.LSTM(self.observation_dim, self.hidden_num, self.layer_num, batch_first=True)
         self.fc1 = nn.Linear(self.hidden_num, 128)
         # nn.LSTM(input_size, hidden_num, layer_num, batch_first=True)
         self.fc2 = nn.Linear(128, self.action_dim)
 
-    def feature_size(self):
-        x = torch.zeros(1, * self.observation_dim)
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        return x.view(1, -1).size(1)
-
     def forward(self, observation, hidden=None):
-        batch_size = observation.size(0)
-        x = self.conv1(observation)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = x.view(batch_size, self.time_step, self.feature_size())
         if not hidden:
             h0 = torch.zeros([self.layer_num, observation.size(0), self.hidden_num])
             c0 = torch.zeros([self.layer_num, observation.size(0), self.hidden_num])
@@ -43,7 +28,7 @@ class drqn_net(nn.Module):
             # hidden [layer_num, batch_size, hidden_num]
         # lstm-x-input [batch_size, time_step, input_size]
         # lstm-x-output [batch_size, time_step, input_size]
-        x, new_hidden = self.lstm(x, hidden)
+        x, new_hidden = self.lstm(observation, hidden)
         x = self.fc1(x[:, -1, :])
         x = F.relu(x)
         x = self.fc2(x)
@@ -65,8 +50,8 @@ class recurrent_replay_buffer(object):
         self.memory.append([])
 
     def store(self, observation, action, reward, next_observation, done):
-        observation = np.expand_dims(observation, 0)
-        next_observation = np.expand_dims(next_observation, 0)
+        observation = np.expand_dims(np.expand_dims(observation, 0), 0)
+        next_observation = np.expand_dims(np.expand_dims(next_observation, 0), 0)
 
         self.memory[-1].append([observation, action, reward, next_observation, done])
 
@@ -114,18 +99,16 @@ if __name__ == '__main__':
     learning_rate = 1e-3
     soft_update_freq = 100
     capacity = 10000
-    exploration = 200
+    exploration = 300
     epsilon_init = 0.9
     epsilon_min = 0.05
     decay = 0.99
     episode = 1000000
     render = False
 
-    envid = 'FrostbiteNoFrameskip-v4'
-    env = make_atari(envid)
-    env = wrap_deepmind(env)
-    env = wrap_pytorch(env)
-    observation_dim = env.observation_space.shape
+    env = gym.make('CartPole-v0')
+    env = env.unwrapped
+    observation_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
     target_net = drqn_net(observation_dim, action_dim)
     eval_net = drqn_net(observation_dim, action_dim)
@@ -146,7 +129,7 @@ if __name__ == '__main__':
         if render:
             env.render()
         while True:
-            action, hidden = eval_net.act(torch.FloatTensor(np.expand_dims(obs, 0)), epsilon, hidden)
+            action, hidden = eval_net.act(torch.FloatTensor(np.expand_dims(np.expand_dims(obs, 0), 0)), epsilon, hidden)
             count += 1
             next_obs, reward, done, info = env.step(action)
             buffer.store(obs, action, reward, next_obs, done)

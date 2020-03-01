@@ -20,7 +20,7 @@ class drqn_net(nn.Module):
         self.conv3 = nn.Conv2d(64, 64, 3, 1)
         self.lstm = nn.LSTM(self.feature_size(), self.hidden_num, self.layer_num, batch_first=True)
         self.fc1 = nn.Linear(self.hidden_num, 128)
-        # nn.LSTM(input_size, hidden_num, layer_num, batch_first=True)
+        # * nn.LSTM(input_size, hidden_num, layer_num, batch_first=True)
         self.fc2 = nn.Linear(128, self.action_dim)
 
     def feature_size(self):
@@ -40,9 +40,9 @@ class drqn_net(nn.Module):
             h0 = torch.zeros([self.layer_num, observation.size(0), self.hidden_num])
             c0 = torch.zeros([self.layer_num, observation.size(0), self.hidden_num])
             hidden = (h0, c0)
-            # hidden [layer_num, batch_size, hidden_num]
-        # lstm-x-input [batch_size, time_step, input_size]
-        # lstm-x-output [batch_size, time_step, input_size]
+            # * hidden [layer_num, batch_size, hidden_num]
+        # * lstm-x-input [batch_size, time_step, hidden_num]
+        # * lstm-x-output [batch_size, time_step, hidden_num]
         x, new_hidden = self.lstm(x, hidden)
         x = self.fc1(x[:, -1, :])
         x = F.relu(x)
@@ -98,7 +98,7 @@ def train(buffer, target_model, eval_model, gamma, optimizer, loss_fn, count, so
     q_value = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
     expected_q_value = reward + gamma * (1 - done) * next_q_value
 
-    #loss = loss_fn(q_value, expected_q_value.detach())
+    # * loss = loss_fn(q_value, expected_q_value.detach())
     loss = (expected_q_value.detach() - q_value).pow(2)
     loss = loss.mean()
 
@@ -114,7 +114,7 @@ if __name__ == '__main__':
     learning_rate = 1e-3
     soft_update_freq = 100
     capacity = 10000
-    exploration = 200
+    exploration = 100
     epsilon_init = 0.9
     epsilon_min = 0.05
     decay = 0.99

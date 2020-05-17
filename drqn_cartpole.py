@@ -29,7 +29,7 @@ class drqn_net(nn.Module):
         # lstm-x-input [batch_size, time_step, input_size]
         # lstm-x-output [batch_size, time_step, input_size]
         x, new_hidden = self.lstm(observation, hidden)
-        x = self.fc1(x[:, -1, :])
+        x = self.fc1(x)
         x = F.relu(x)
         x = self.fc2(x)
         return x, new_hidden
@@ -37,38 +37,52 @@ class drqn_net(nn.Module):
     def act(self, observation, epsilon, hidden):
         q_values, new_hidden = self.forward(observation, hidden)
         if random.random() > epsilon:
-            action = q_values.max(1)[1].detach()[0].item()
+            action = q_values.max(-1)[1].detach()[0].item()
         else:
             action = random.choice(list(range(self.action_dim)))
         return action, new_hidden
 
 
 class recurrent_replay_buffer(object):
-    def __init__(self, capacity):
+    def __init__(self, capacity, seq_len=50):
         self.capacity = capacity
+        self.seq_len = seq_len
         self.memory = deque(maxlen=self.capacity)
         self.memory.append([])
 
     def store(self, observation, action, reward, next_observation, done):
-        observation = np.expand_dims(np.expand_dims(observation, 0), 0)
-        next_observation = np.expand_dims(np.expand_dims(next_observation, 0), 0)
+        observation = np.expand_dims(observation, 0)
+        next_observation = np.expand_dims(next_observation, 0)
 
         self.memory[-1].append([observation, action, reward, next_observation, done])
 
-        if done:
+        if len(self.memory[-1]) == self.seq_len:
             self.memory.append([])
 
-    def sample(self):
-        idx = random.choice(list(range(len(self.memory) - 1)))
-        observation, action, reward, next_observation, done = zip(* self.memory[idx])
+    def sample(self, batch_size=32):
+        observation = []
+        action = []
+        reward = []
+        next_observation = []
+        done = []
+        batch = random.sample(list(self.memory)[: -1], batch_size)
+        for i in range(batch_size):
+            obs, act, rew, next_obs, don = zip(* batch[i])
+            obs = np.expand_dims(np.concatenate(obs, 0), 0)
+            next_obs = np.expand_dims(np.concatenate(next_obs, 0), 0)
+            observation.append(obs)
+            action.append(act)
+            reward.append(rew)
+            next_observation.append(next_obs)
+            done.append(don)
         return np.concatenate(observation, 0), action, reward, np.concatenate(next_observation, 0), done
 
     def __len__(self):
         return len(self.memory)
 
 
-def train(buffer, target_model, eval_model, gamma, optimizer, loss_fn, count, soft_update_freq):
-    observation, action, reward, next_observation, done = buffer.sample()
+def train(buffer, target_model, eval_model, gamma, optimizer, loss_fn, count, soft_update_freq, batch_size):
+    observation, action, reward, next_observation, done = buffer.sample(batch_size)
 
     observation = torch.FloatTensor(observation)
     action = torch.LongTensor(action)
@@ -78,9 +92,9 @@ def train(buffer, target_model, eval_model, gamma, optimizer, loss_fn, count, so
 
     q_values, _ = eval_model.forward(observation)
     next_q_values, _ = target_model.forward(next_observation)
-    argmax_actions = eval_model.forward(next_observation)[0].max(1)[1].detach()
-    next_q_value = next_q_values.gather(1, argmax_actions.unsqueeze(1)).squeeze(1)
-    q_value = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
+    argmax_actions = eval_model.forward(next_observation)[0].max(-1)[1].detach()
+    next_q_value = next_q_values.gather(-1, argmax_actions.unsqueeze(-1)).squeeze(-1)
+    q_value = q_values.gather(-1, action.unsqueeze(-1)).squeeze(-1)
     expected_q_value = reward + gamma * (1 - done) * next_q_value
 
     #loss = loss_fn(q_value, expected_q_value.detach())
@@ -105,6 +119,8 @@ if __name__ == '__main__':
     decay = 0.99
     episode = 1000000
     render = False
+    seq_len = 50
+    batch_size = 8
 
     env = gym.make('CartPole-v0')
     env = env.unwrapped
@@ -114,7 +130,7 @@ if __name__ == '__main__':
     eval_net = drqn_net(observation_dim, action_dim)
     eval_net.load_state_dict(target_net.state_dict())
     optimizer = torch.optim.Adam(eval_net.parameters(), lr=learning_rate)
-    buffer = recurrent_replay_buffer(capacity)
+    buffer = recurrent_replay_buffer(capacity, seq_len)
     loss_fn = nn.MSELoss()
     epsilon = epsilon_init
     count = 0
@@ -138,7 +154,7 @@ if __name__ == '__main__':
             if render:
                 env.render()
             if i > exploration:
-                train(buffer, target_net, eval_net, gamma, optimizer, loss_fn, count, soft_update_freq)
+                train(buffer, target_net, eval_net, gamma, optimizer, loss_fn, count, soft_update_freq, batch_size)
 
             if done:
                 if not weight_reward:
